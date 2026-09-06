@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Hushline | Private chat</title>
+	<meta name="description" content="A private, account-free chat room for two people.">
+	<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+	<style>
+		:root {
+			--ink: #18211f;
+			--muted: #6f7b75;
+			--paper: #f4f5ee;
+			--panel: rgba(255, 255, 255, .78);
+			--line: #dfe5dd;
+			--mint: #b8ebcf;
+			--mint-deep: #22624e;
+			--coral: #ff876f;
+			--night: #203432;
+			--shadow: 0 24px 70px rgba(38, 62, 51, .14);
+		}
+
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			min-height: 100vh;
+			color: var(--ink);
+			font-family: Georgia, 'Times New Roman', serif;
+			background: var(--paper);
+		}
+		button, input { font: inherit; }
+		button { cursor: pointer; }
+		.shell {
+			min-height: 100vh;
+			padding: 28px clamp(18px, 5vw, 72px);
+			background: radial-gradient(circle at 8% 8%, #d9f1df 0, transparent 30%),
+				radial-gradient(circle at 94% 91%, #ffd5c7 0, transparent 28%), var(--paper);
+		}
+		.topbar, .intro, .chat-header, .chat-footer { display: flex; align-items: center; }
+		.topbar { justify-content: space-between; max-width: 1180px; margin: auto; }
+		.brand { display: flex; align-items: center; gap: 10px; font-weight: bold; font-size: 19px; letter-spacing: .02em; }
+		.brand-mark { width: 28px; height: 28px; border-radius: 9px 9px 9px 3px; background: var(--night); position: relative; }
+		.brand-mark::after { content: ''; position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--coral); left: 7px; top: 7px; box-shadow: 10px 0 var(--mint); }
+		.top-note { font: 12px 'Segoe UI', sans-serif; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+		main { max-width: 1180px; margin: 7vh auto 0; }
+		.intro { align-items: flex-end; justify-content: space-between; gap: 40px; margin-bottom: 30px; }
+		h1 { max-width: 680px; margin: 0; font-size: clamp(42px, 7vw, 82px); line-height: .93; font-weight: normal; letter-spacing: -.055em; }
+		.intro-copy { max-width: 260px; margin: 0 0 6px; color: var(--muted); font: 14px/1.55 'Segoe UI', sans-serif; }
+		.workspace { display: grid; grid-template-columns: minmax(275px, 340px) 1fr; min-height: 575px; overflow: hidden; border: 1px solid rgba(255,255,255,.8); border-radius: 22px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(15px); }
+		.sidebar { padding: 32px; border-right: 1px solid var(--line); background: rgba(255,255,255,.45); }
+		.eyebrow { margin: 0 0 12px; color: var(--muted); font: 11px 'Segoe UI', sans-serif; letter-spacing: .16em; text-transform: uppercase; }
+		h2 { margin: 0 0 24px; font-size: 29px; line-height: 1; font-weight: normal; letter-spacing: -.035em; }
+		.room-form { display: grid; gap: 13px; }
+		label { color: var(--muted); font: 12px 'Segoe UI', sans-serif; }
+		.code-input { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 14px; outline: none; color: var(--ink); background: white; font: 700 17px 'Segoe UI', sans-serif; letter-spacing: .13em; text-transform: uppercase; }
+		.code-input:focus { border-color: var(--mint-deep); box-shadow: 0 0 0 3px rgba(34,98,78,.1); }
+		.primary, .secondary { border: 0; border-radius: 10px; padding: 14px 16px; font: 600 13px 'Segoe UI', sans-serif; transition: transform .2s, box-shadow .2s; }
+		.primary { color: white; background: var(--night); box-shadow: 0 7px 15px rgba(32,52,50,.16); }
+		.primary:hover { transform: translateY(-2px); box-shadow: 0 11px 19px rgba(32,52,50,.23); }
+		.secondary { color: var(--mint-deep); background: var(--mint); }
+		.secondary:hover { transform: translateY(-2px); }
+		.divider { display: flex; align-items: center; gap: 10px; margin: 26px 0; color: #a7b0aa; font: 11px 'Segoe UI', sans-serif; }
+		.divider::before, .divider::after { content: ''; height: 1px; flex: 1; background: var(--line); }
+		.privacy-note { display: flex; gap: 10px; margin-top: 33px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font: 12px/1.5 'Segoe UI', sans-serif; }
+		.lock { color: var(--mint-deep); font-size: 17px; }
+		.chat { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; background: rgba(255,255,255,.68); }
+		.chat-header { justify-content: space-between; padding: 25px 30px; border-bottom: 1px solid var(--line); }
+		.room-name { display: flex; align-items: center; gap: 10px; font-size: 19px; }
+		.status-dot { width: 9px; height: 9px; border-radius: 50%; background: #c0c9c2; }
+		.status-dot.online { background: #4caf75; box-shadow: 0 0 0 4px rgba(76,175,117,.13); }
+		.status-text { max-width: 150px; color: var(--muted); font: 12px 'Segoe UI', sans-serif; text-align: right; }
+		.chat-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; padding: 30px; }
+		.empty-state { margin: auto; max-width: 250px; text-align: center; color: var(--muted); font: 13px/1.55 'Segoe UI', sans-serif; }
+		.empty-icon { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 50%; color: var(--mint-deep); background: var(--mint); font-size: 21px; }
+		.message { max-width: min(75%, 430px); padding: 13px 16px; border-radius: 4px 15px 15px 15px; color: var(--ink); background: #eef2ed; font: 14px/1.45 'Segoe UI', sans-serif; animation: rise .3s ease both; }
+		.message.mine { align-self: flex-end; border-radius: 15px 4px 15px 15px; color: #fff; background: var(--night); }
+		.message-time { display: block; margin-top: 5px; opacity: .55; font-size: 10px; }
+		.chat-footer { gap: 10px; padding: 18px 25px; border-top: 1px solid var(--line); }
+		.message-input { min-width: 0; flex: 1; border: 1px solid transparent; border-radius: 10px; padding: 13px 15px; outline: none; color: var(--ink); background: #f2f4ef; font: 14px 'Segoe UI', sans-serif; }
+		.message-input:focus { border-color: var(--line); background: white; }
+		.send { width: 43px; height: 43px; border: 0; border-radius: 10px; color: white; background: var(--coral); font-size: 19px; }
+		.send:disabled, .message-input:disabled { cursor: not-allowed; opacity: .45; }
+		.share-row { display: flex; gap: 8px; margin-top: 20px; }
+		.share-button { flex: 1; border: 1px solid var(--line); border-radius: 9px; padding: 9px; color: var(--muted); background: transparent; font: 12px 'Segoe UI', sans-serif; }
+		.share-button:hover { color: var(--ink); background: white; }
+		.group-note { margin: 11px 0 0; color: var(--muted); font: 11px/1.4 'Segoe UI', sans-serif; }
+		.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 24px; padding: 5px; border-radius: 12px; background: #e9eee8; }
+		.mode-button { border: 0; border-radius: 8px; padding: 11px 8px; color: var(--muted); background: transparent; font: 600 12px 'Segoe UI', sans-serif; }
+		.mode-button.active { color: var(--ink); background: white; box-shadow: 0 2px 8px rgba(38,62,51,.1); }
+		.mode-panel[hidden] { display: none; }
+		.toast { position: fixed; right: 24px; bottom: 24px; padding: 12px 16px; border-radius: 10px; color: white; background: var(--night); font: 12px 'Segoe UI', sans-serif; opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; }
+		.toast.show { opacity: 1; transform: translateY(0); }
+		@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+		@media (max-width: 760px) {
+			.shell { padding: 20px 14px; }
+			main { margin-top: 45px; }
+			.top-note { display: none; }
+			.intro { display: block; margin-bottom: 24px; }
+			h1 { font-size: clamp(48px, 15vw, 76px); }
+			.intro-copy { margin-top: 18px; }
+			.workspace { display: block; min-height: 0; }
+			.sidebar { padding: 25px; border-right: 0; border-bottom: 1px solid var(--line); }
+			.privacy-note { margin-top: 22px; }
+			.chat { min-height: 510px; }
+			.chat-header { padding: 20px; }
+			.chat-body { min-height: 260px; padding: 22px 20px; }
+			.chat-footer { padding: 14px; }
+		}
+	</style>
+</head>
+<body>
+	<div class="shell">
+		<header class="topbar">
+			<div class="brand"><span class="brand-mark" aria-hidden="true"></span> hushline</div>
+			<div class="top-note">quiet conversations, no accounts</div>
+		</header>
+
+		<main>
+			<section class="intro">
+				<h1>Talk close.<br><i>Stay private.</i></h1>
+				<p class="intro-copy">A tiny room for two. Choose a secret code, share it with one person, and leave no profile behind.</p>
+			</section>
+
+			<section class="workspace" aria-label="Private chat workspace">
+				<aside class="sidebar">
+					<div class="mode-switch" role="tablist" aria-label="Chat type">
+						<button class="mode-button active" id="privateMode" type="button" role="tab" aria-selected="true">Private · 2</button>
+						<button class="mode-button" id="groupMode" type="button" role="tab" aria-selected="false">Random group · 5</button>
+					</div>
+					<div class="mode-panel" id="privatePanel">
+						<p class="eyebrow">Private chat</p>
+						<h2>Enter the secret.</h2>
+						<form class="room-form" id="roomForm">
+						<label for="roomCode">A code only you two know</label>
+						<input class="code-input" id="roomCode" maxlength="24" autocomplete="off" placeholder="e.g. moon-river-7" required>
+						<button class="primary" type="submit">Create private room <span aria-hidden="true">&rarr;</span></button>
+						</form>
+						<div class="divider">OR</div>
+						<button class="secondary" id="joinRoom" type="button">Join with this code</button>
+						<div class="share-row">
+						<button class="share-button" id="copyInvite" type="button" disabled>Copy invite</button>
+						<button class="share-button" id="leaveRoom" type="button" disabled>Leave</button>
+						</div>
+					</div>
+					<div class="mode-panel" id="groupPanel" hidden>
+						<p class="eyebrow">Random group chat</p>
+						<h2>Meet up to four others.</h2>
+						<p class="group-note">Tap the button and you will be matched randomly with people who are also looking for a group. No code, no invite.</p>
+						<button class="primary" id="randomGroup" type="button">Join random group <span aria-hidden="true">&rarr;</span></button>
+						<p class="group-note">Maximum 5 people per group.</p>
+					</div>
+					<div class="privacy-note"><span class="lock">⌁</span><span>No names, emails, or passwords. Messages travel directly between both browsers.</span></div>
+				</aside>
+
+				<section class="chat" aria-label="Messages">
+					<header class="chat-header">
+						<div class="room-name"><span class="status-dot" id="statusDot"></span><span id="roomTitle">No room open</span></div>
+						<span class="status-text" id="statusText">Waiting for a room</span>
+					</header>
+					<div class="chat-body" id="chatBody">
+						<div class="empty-state" id="emptyState"><div class="empty-icon">⌁</div><strong>Your room is quiet.</strong><br>Open a room, then send the invite to one person.</div>
+					</div>
+					<form class="chat-footer" id="messageForm">
+						<input class="message-input" id="messageInput" placeholder="Open a room to start typing..." autocomplete="off" disabled>
+						<button class="send" type="submit" aria-label="Send message" disabled>&uarr;</button>
+					</form>
+				</section>
+			</section>
+		</main>
+	</div>
+	<div class="toast" id="toast" role="status"></div>
+
+	<script>
+		const roomForm = document.querySelector('#roomForm');
+		const roomCode = document.querySelector('#roomCode');
+		const joinRoom = document.querySelector('#joinRoom');
+		const privateMode = document.querySelector('#privateMode');
+		const groupMode = document.querySelector('#groupMode');
+		const privatePanel = document.querySelector('#privatePanel');
+		const groupPanel = document.querySelector('#groupPanel');
+		const randomGroup = document.querySelector('#randomGroup');
+		const copyInvite = document.querySelector('#copyInvite');
+		const leaveRoom = document.querySelector('#leaveRoom');
+		const roomTitle = document.querySelector('#roomTitle');
+		const statusText = document.querySelector('#statusText');
+		const statusDot = document.querySelector('#statusDot');
+		const chatBody = document.querySelector('#chatBody');
+		const emptyState = document.querySelector('#emptyState');
+		const messageForm = document.querySelector('#messageForm');
+		const messageInput = document.querySelector('#messageInput');
+		const sendButton = messageForm.querySelector('button');
+		const toast = document.querySelector('#toast');
+		let peer;
+		const connections = new Set();
+		const seenMessages = new Set();
+		let activeRoom = '';
+		let maxParticipants = 2;
+		let chatMode = 'private';
+		let lobbySocket;
+
+		function notify(text) {
+			toast.textContent = text;
+			toast.classList.add('show');
+			setTimeout(() => toast.classList.remove('show'), 2600);
+		}
+
+		function roomId(code) {
+			let hash = 0;
+			for (let index = 0; index < code.length; index += 1) hash = ((hash << 5) - hash + code.charCodeAt(index)) | 0;
+			return `hushline-${Math.abs(hash)}-${code.length}`;
+		}
+
+		function setStatus(text, online = false) {
+			statusText.textContent = text;
+			statusDot.classList.toggle('online', online);
+		}
+
+		function addMessage(text, mine = false) {
+			emptyState?.remove();
+			const message = document.createElement('div');
+			const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+			message.className = `message${mine ? ' mine' : ''}`;
+			message.textContent = text;
+			const stamp = document.createElement('span');
+			stamp.className = 'message-time';
+			stamp.textContent = time;
+			message.append(stamp);
+			chatBody.append(message);
+			chatBody.scrollTop = chatBody.scrollHeight;
+		}
+
+		function enableChat(enabled) {
+			messageInput.disabled = !enabled;
+			sendButton.disabled = !enabled;
+			copyInvite.disabled = !activeRoom;
+			leaveRoom.disabled = !activeRoom;
+			messageInput.placeholder = enabled ? 'Write a message...' : 'Waiting for the other person...';
+		}
+
+		function updateParticipantStatus() {
+			const participantCount = Math.min(connections.size + 1, maxParticipants);
+			if (connections.size) setStatus(`${participantCount}/${maxParticipants} people connected`, true);
+		}
+
+		function broadcast(payload, except) {
+			connections.forEach((currentConnection) => {
+				if (currentConnection !== except && currentConnection.open) currentConnection.send(payload);
+			});
+		}
+
+		function resetChat() {
+			peer?.destroy();
+			lobbySocket?.close();
+			connections.clear();
+			seenMessages.clear();
+			activeRoom = '';
+			roomTitle.textContent = 'No room open';
+			setStatus('Waiting for a room');
+			enableChat(false);
+		}
+
+		function showMode(mode) {
+			resetChat();
+			chatMode = mode;
+			const isPrivate = mode === 'private';
+			maxParticipants = isPrivate ? 2 : 5;
+			privateMode.classList.toggle('active', isPrivate);
+			groupMode.classList.toggle('active', !isPrivate);
+			privateMode.setAttribute('aria-selected', isPrivate);
+			groupMode.setAttribute('aria-selected', !isPrivate);
+			privatePanel.hidden = !isPrivate;
+			groupPanel.hidden = isPrivate;
+		}
+
+		function connectToPeer(peerId) {
+			if (peerId && peerId !== peer?.id && ![...connections].some((currentConnection) => currentConnection.peer === peerId)) setupConnection(peer.connect(peerId, { reliable: true }));
+		}
+
+		function joinRandomGroup() {
+			resetChat();
+			chatMode = 'group';
+			maxParticipants = 5;
+			roomTitle.textContent = 'Random group';
+			setStatus('Finding people...', false);
+			const socketUrl = location.protocol === 'file:' ? 'ws://localhost:8080' : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+			lobbySocket = new WebSocket(socketUrl);
+			lobbySocket.onopen = () => lobbySocket.send(JSON.stringify({ type: 'join-group', peerId: `${Date.now()}-${Math.random()}` }));
+			lobbySocket.onmessage = (event) => {
+				const data = JSON.parse(event.data);
+				if (data.type === 'matched') { enableChat(true); setStatus(`${data.count}/5 people connected`, true); }
+				if (data.type === 'peer-joined') { setStatus(`${data.count}/5 people connected`, true); notify('Someone joined the group.'); }
+				if (data.type === 'chat') { addMessage(data.text, false); }
+				if (data.type === 'group-full') { setStatus('Group is full', false); enableChat(false); notify('This group already has 5 people.'); }
+			};
+			lobbySocket.onerror = () => { setStatus('Connection unavailable', false); notify('Start the matchmaking server, then try again.'); };
+			lobbySocket.onclose = () => { if (chatMode === 'group') { setStatus('Group disconnected', false); enableChat(false); } };
+			setStatus('Waiting for random people...', false);
+		}
+
+		function connectRoom(code, hostPeerId = '') {
+			if (peer) peer.destroy();
+			connections.clear();
+			chatMode = 'private';
+			maxParticipants = 2;
+			activeRoom = code.trim().toLowerCase();
+			roomCode.value = activeRoom;
+			roomTitle.textContent = `Room / ${activeRoom}`;
+			setStatus('Connecting...', false);
+			enableChat(false);
+			peer = new Peer(hostPeerId ? undefined : roomId(activeRoom));
+
+			peer.on('open', () => {
+				if (hostPeerId) {
+					setStatus('Connecting to your person', false);
+					setupConnection(peer.connect(hostPeerId, { reliable: true }));
+				} else setStatus('Waiting for your person', false);
+			});
+			peer.on('connection', setupConnection);
+			peer.on('error', (error) => {
+				if (error.type === 'unavailable-id' && !hostPeerId) {
+					peer.destroy();
+					peer = new Peer();
+					peer.on('open', () => {
+						setStatus('Joining room...', false);
+						setupConnection(peer.connect(roomId(activeRoom), { reliable: true }));
+					});
+					peer.on('error', () => { setStatus('Could not join room', false); notify('The room could not be found. Check the code.'); });
+				}
+				else { setStatus('Could not connect', false); notify('Check the room code and try again.'); }
+			});
+			copyInvite.disabled = false;
+			leaveRoom.disabled = false;
+			notify(`Room ${activeRoom} is ready to share`);
+		}
+
+		function setupConnection(incoming) {
+			if (!incoming || connections.has(incoming)) return;
+			incoming.on('open', () => {
+				if (connections.size >= maxParticipants - 1) {
+					incoming.send({ type: 'full' });
+					incoming.close();
+					return;
+				}
+				connections.add(incoming);
+				enableChat(true);
+				updateParticipantStatus();
+				notify('Someone joined the room.');
+			});
+			incoming.on('data', (data) => {
+				if (data && data.type === 'full') { setStatus('Group is full', false); enableChat(false); notify('This group already has 5 people.'); return; }
+				const payload = data && data.type === 'chat' ? data : { type: 'chat', text: String(data) };
+				if (payload.id && seenMessages.has(payload.id)) return;
+				if (payload.id) seenMessages.add(payload.id);
+				addMessage(payload.text, false);
+				broadcast(payload, incoming);
+			});
+			incoming.on('error', () => { connections.delete(incoming); updateParticipantStatus(); notify('A connection was interrupted.'); });
+			incoming.on('close', () => { connections.delete(incoming); updateParticipantStatus(); if (!connections.size) { setStatus('Waiting for your person', false); enableChat(false); } });
+		}
+
+		roomForm.addEventListener('submit', (event) => { event.preventDefault(); if (roomCode.value.trim()) connectRoom(roomCode.value); });
+		privateMode.addEventListener('click', () => showMode('private'));
+		groupMode.addEventListener('click', () => showMode('group'));
+		randomGroup.addEventListener('click', joinRandomGroup);
+		joinRoom.addEventListener('click', () => {
+			const code = roomCode.value.trim();
+			if (!code) { notify('Enter the room code first.'); roomCode.focus(); return; }
+			if (peer) peer.destroy();
+			activeRoom = code.toLowerCase();
+			roomTitle.textContent = `Room / ${activeRoom}`;
+			setStatus('Joining room...', false);
+			enableChat(false);
+			peer = new Peer();
+			peer.on('open', () => setupConnection(peer.connect(roomId(activeRoom), { reliable: true })));
+			peer.on('error', () => { setStatus('Could not join room', false); notify('That room is not available. Check the code.'); });
+			copyInvite.disabled = false;
+			leaveRoom.disabled = false;
+		});
+		messageForm.addEventListener('submit', (event) => {
+			event.preventDefault();
+			const text = messageInput.value.trim();
+			if (!text || (chatMode === 'group' ? lobbySocket?.readyState !== WebSocket.OPEN : !connections.size)) return;
+			const payload = { type: 'chat', id: `${Date.now()}-${Math.random()}`, text };
+			seenMessages.add(payload.id);
+			if (chatMode === 'group') lobbySocket.send(JSON.stringify(payload));
+			else broadcast(payload);
+			addMessage(text, true);
+			messageInput.value = '';
+		});
+		copyInvite.addEventListener('click', async () => {
+			const inviteLink = `${location.href.split('#')[0]}#room=${encodeURIComponent(activeRoom)}&peer=${encodeURIComponent(peer.id)}`;
+			try {
+				if (navigator.clipboard) await navigator.clipboard.writeText(inviteLink);
+				else throw new Error('Clipboard unavailable');
+			} catch {
+				const helper = document.createElement('textarea');
+				helper.value = inviteLink;
+				document.body.append(helper);
+				helper.select();
+				document.execCommand('copy');
+				helper.remove();
+			}
+			notify('Invite link copied.');
+		});
+		leaveRoom.addEventListener('click', () => { resetChat(); roomCode.value = ''; notify('Room closed.'); });
+
+		const invite = new URLSearchParams(location.hash.replace('#', '?'));
+		const invitedRoom = invite.get('room');
+		if (invitedRoom) { roomCode.value = invitedRoom; connectRoom(invitedRoom, invite.get('peer') || ''); }
+	</script>
+</body>
+</html>
