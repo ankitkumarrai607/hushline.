@@ -197,6 +197,7 @@
 		let maxParticipants = 2;
 		let chatMode = 'private';
 		let lobbySocket;
+		let chatSession = 0;
 
 		function notify(text) {
 			toast.textContent = text;
@@ -249,14 +250,21 @@
 		}
 
 		function resetChat() {
+			chatSession += 1;
 			peer?.destroy();
 			lobbySocket?.close();
+			lobbySocket = null;
 			connections.clear();
 			seenMessages.clear();
 			activeRoom = '';
 			roomTitle.textContent = 'No room open';
 			setStatus('Waiting for a room');
 			enableChat(false);
+			chatBody.replaceChildren();
+			const freshEmptyState = document.createElement('div');
+			freshEmptyState.className = 'empty-state';
+			freshEmptyState.innerHTML = '<div class="empty-icon">⌁</div><strong>Your room is quiet.</strong><br>Open a room, then send a message.';
+			chatBody.append(freshEmptyState);
 		}
 
 		function showMode(mode) {
@@ -278,6 +286,7 @@
 
 		function joinRandomGroup() {
 			resetChat();
+			const session = chatSession;
 			chatMode = 'group';
 			maxParticipants = 5;
 			roomTitle.textContent = 'Random group';
@@ -286,10 +295,11 @@
 			lobbySocket = new WebSocket(socketUrl);
 			lobbySocket.onopen = () => lobbySocket.send(JSON.stringify({ type: 'join-group', peerId: `${Date.now()}-${Math.random()}` }));
 			lobbySocket.onmessage = (event) => {
+				if (session !== chatSession || chatMode !== 'group') return;
 				const data = JSON.parse(event.data);
 				if (data.type === 'matched') { enableChat(true); setStatus(`${data.count}/5 people connected`, true); }
 				if (data.type === 'peer-joined') { setStatus(`${data.count}/5 people connected`, true); notify('Someone joined the group.'); }
-				if (data.type === 'chat') { addMessage(data.text, false); }
+				if (data.type === 'chat' && chatMode === 'group') { addMessage(data.text, false); }
 				if (data.type === 'group-full') { setStatus('Group is full', false); enableChat(false); notify('This group already has 5 people.'); }
 			};
 			lobbySocket.onerror = () => { setStatus('Connection unavailable', false); notify('Start the matchmaking server, then try again.'); };
@@ -299,6 +309,8 @@
 
 		function connectRoom(code, hostPeerId = '') {
 			if (peer) peer.destroy();
+			if (lobbySocket) lobbySocket.close();
+			lobbySocket = null;
 			connections.clear();
 			chatMode = 'private';
 			maxParticipants = 2;
@@ -366,6 +378,8 @@
 			const code = roomCode.value.trim();
 			if (!code) { notify('Enter the room code first.'); roomCode.focus(); return; }
 			if (peer) peer.destroy();
+			if (lobbySocket) lobbySocket.close();
+			lobbySocket = null;
 			activeRoom = code.toLowerCase();
 			roomTitle.textContent = `Room / ${activeRoom}`;
 			setStatus('Joining room...', false);
@@ -380,7 +394,7 @@
 			event.preventDefault();
 			const text = messageInput.value.trim();
 			if (!text || (chatMode === 'group' ? lobbySocket?.readyState !== WebSocket.OPEN : !connections.size)) return;
-			const payload = { type: 'chat', id: `${Date.now()}-${Math.random()}`, text };
+			const payload = { type: 'chat', scope: chatMode, id: `${Date.now()}-${Math.random()}`, text };
 			seenMessages.add(payload.id);
 			if (chatMode === 'group') lobbySocket.send(JSON.stringify(payload));
 			else broadcast(payload);

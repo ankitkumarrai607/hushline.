@@ -36,9 +36,9 @@ socketServer.on('connection', (socket) => {
   socket.on('message', (rawMessage) => {
     let message;
     try { message = JSON.parse(rawMessage); } catch { return; }
-    if (message.type === 'chat' && clientGroups.has(socket)) {
+    if (message.type === 'chat' && message.scope === 'group' && clientGroups.has(socket)) {
       const group = clientGroups.get(socket);
-      group.forEach((member) => { if (member !== socket) send(member, { type: 'chat', id: message.id, text: String(message.text || '') }); });
+      group.forEach((member) => { if (member !== socket) send(member, { type: 'chat', scope: 'group', id: message.id, text: String(message.text || '') }); });
       return;
     }
     if (message.type !== 'join-group' || typeof message.peerId !== 'string') return;
