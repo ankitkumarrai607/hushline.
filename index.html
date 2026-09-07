@@ -69,6 +69,9 @@
 		.status-dot { width: 9px; height: 9px; border-radius: 50%; background: #c0c9c2; }
 		.status-dot.online { background: #4caf75; box-shadow: 0 0 0 4px rgba(76,175,117,.13); }
 		.status-text { max-width: 150px; color: var(--muted); font: 12px 'Segoe UI', sans-serif; text-align: right; }
+		.typing-indicator { min-height: 18px; padding: 0 30px; color: var(--mint-deep); font: 12px 'Segoe UI', sans-serif; }
+		.typing-indicator[hidden] { display: block; visibility: hidden; }
+		.typing-indicator::after { content: ' ·  ·  ·'; display: inline-block; margin-left: 4px; animation: pulse 1.2s infinite; }
 		.chat-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; padding: 30px; }
 		.empty-state { margin: auto; max-width: 250px; text-align: center; color: var(--muted); font: 13px/1.55 'Segoe UI', sans-serif; }
 		.empty-icon { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 50%; color: var(--mint-deep); background: var(--mint); font-size: 21px; }
@@ -91,6 +94,7 @@
 		.toast { position: fixed; right: 24px; bottom: 24px; padding: 12px 16px; border-radius: 10px; color: white; background: var(--night); font: 12px 'Segoe UI', sans-serif; opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; }
 		.toast.show { opacity: 1; transform: translateY(0); }
 		@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+		@keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 		@media (max-width: 760px) {
 			.shell { padding: 20px 14px; }
 			main { margin-top: 45px; }
@@ -157,6 +161,7 @@
 						<div class="room-name"><span class="status-dot" id="statusDot"></span><span id="roomTitle">No room open</span></div>
 						<span class="status-text" id="statusText">Waiting for a room</span>
 					</header>
+					<div class="typing-indicator" id="typingIndicator" hidden>Someone is typing</div>
 					<div class="chat-body" id="chatBody">
 						<div class="empty-state" id="emptyState"><div class="empty-icon">⌁</div><strong>Your room is quiet.</strong><br>Open a room, then send the invite to one person.</div>
 					</div>
@@ -184,6 +189,7 @@
 		const roomTitle = document.querySelector('#roomTitle');
 		const statusText = document.querySelector('#statusText');
 		const statusDot = document.querySelector('#statusDot');
+		const typingIndicator = document.querySelector('#typingIndicator');
 		const chatBody = document.querySelector('#chatBody');
 		const emptyState = document.querySelector('#emptyState');
 		const messageForm = document.querySelector('#messageForm');
@@ -198,6 +204,8 @@
 		let chatMode = 'private';
 		let lobbySocket;
 		let chatSession = 0;
+		let localTypingTimer;
+		let remoteTypingTimer;
 
 		function notify(text) {
 			toast.textContent = text;
@@ -214,6 +222,16 @@
 		function setStatus(text, online = false) {
 			statusText.textContent = text;
 			statusDot.classList.toggle('online', online);
+		}
+
+		function showTyping(visible) {
+			typingIndicator.hidden = !visible;
+			clearTimeout(remoteTypingTimer);
+			if (visible) remoteTypingTimer = setTimeout(() => { typingIndicator.hidden = true; }, 1800);
+		}
+
+		function sendSignal(signal) {
+			if (lobbySocket?.readyState === WebSocket.OPEN) lobbySocket.send(JSON.stringify({ ...signal, scope: chatMode }));
 		}
 
 		function addMessage(text, mine = false) {
@@ -300,6 +318,7 @@
 				if (data.type === 'matched') { enableChat(true); setStatus(`${data.count}/5 people connected`, true); }
 				if (data.type === 'peer-joined') { setStatus(`${data.count}/5 people connected`, true); notify('Someone joined the group.'); }
 				if (data.type === 'chat' && chatMode === 'group') { addMessage(data.text, false); }
+				if (data.type === 'typing' && chatMode === 'group') showTyping(data.active);
 				if (data.type === 'group-full') { setStatus('Group is full', false); enableChat(false); notify('This group already has 5 people.'); }
 			};
 			lobbySocket.onerror = () => { setStatus('Connection unavailable', false); notify('Start the matchmaking server, then try again.'); };
@@ -308,41 +327,30 @@
 		}
 
 		function connectRoom(code, hostPeerId = '') {
-			if (peer) peer.destroy();
-			if (lobbySocket) lobbySocket.close();
-			lobbySocket = null;
-			connections.clear();
+			resetChat();
 			chatMode = 'private';
 			maxParticipants = 2;
 			activeRoom = code.trim().toLowerCase();
 			roomCode.value = activeRoom;
 			roomTitle.textContent = `Room / ${activeRoom}`;
 			setStatus('Connecting...', false);
-			enableChat(false);
-			peer = new Peer(hostPeerId ? undefined : roomId(activeRoom));
-
-			peer.on('open', () => {
-				if (hostPeerId) {
-					setStatus('Connecting to your person', false);
-					setupConnection(peer.connect(hostPeerId, { reliable: true }));
-				} else setStatus('Waiting for your person', false);
-			});
-			peer.on('connection', setupConnection);
-			peer.on('error', (error) => {
-				if (error.type === 'unavailable-id' && !hostPeerId) {
-					peer.destroy();
-					peer = new Peer();
-					peer.on('open', () => {
-						setStatus('Joining room...', false);
-						setupConnection(peer.connect(roomId(activeRoom), { reliable: true }));
-					});
-					peer.on('error', () => { setStatus('Could not join room', false); notify('The room could not be found. Check the code.'); });
-				}
-				else { setStatus('Could not connect', false); notify('Check the room code and try again.'); }
-			});
+			const socketUrl = location.protocol === 'file:' ? 'ws://localhost:8080' : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+			lobbySocket = new WebSocket(socketUrl);
+			lobbySocket.onopen = () => lobbySocket.send(JSON.stringify({ type: 'join-private', code: activeRoom }));
+			lobbySocket.onmessage = (event) => {
+				if (chatMode !== 'private') return;
+				const data = JSON.parse(event.data);
+				if (data.type === 'private-joined') { enableChat(data.count === 2); setStatus(data.count === 2 ? 'Active now' : 'Waiting for your person', data.count === 2); }
+				if (data.type === 'private-left') { setStatus('Other person offline', false); enableChat(false); }
+				if (data.type === 'private-full') { setStatus('Private room full', false); enableChat(false); notify('Only two people are allowed in private chat.'); }
+				if (data.type === 'chat') addMessage(data.text, false);
+				if (data.type === 'typing') showTyping(data.active);
+			};
+			lobbySocket.onerror = () => { setStatus('Connection unavailable', false); notify('The private server connection failed.'); };
+			lobbySocket.onclose = () => { if (chatMode === 'private') { setStatus('Private chat disconnected', false); enableChat(false); } };
 			copyInvite.disabled = false;
 			leaveRoom.disabled = false;
-			notify(`Room ${activeRoom} is ready to share`);
+			notify(`Private room ${activeRoom} is ready`);
 		}
 
 		function setupConnection(incoming) {
@@ -355,11 +363,13 @@
 				}
 				connections.add(incoming);
 				enableChat(true);
+				setStatus(chatMode === 'private' ? 'Active now' : `${connections.size + 1}/${maxParticipants} people connected`, true);
 				updateParticipantStatus();
 				notify('Someone joined the room.');
 			});
 			incoming.on('data', (data) => {
 				if (data && data.type === 'full') { setStatus('Group is full', false); enableChat(false); notify('This group already has 5 people.'); return; }
+				if (data && data.type === 'typing') { showTyping(data.active); return; }
 				const payload = data && data.type === 'chat' ? data : { type: 'chat', text: String(data) };
 				if (payload.id && seenMessages.has(payload.id)) return;
 				if (payload.id) seenMessages.add(payload.id);
@@ -367,7 +377,7 @@
 				broadcast(payload, incoming);
 			});
 			incoming.on('error', () => { connections.delete(incoming); updateParticipantStatus(); notify('A connection was interrupted.'); });
-			incoming.on('close', () => { connections.delete(incoming); updateParticipantStatus(); if (!connections.size) { setStatus('Waiting for your person', false); enableChat(false); } });
+			incoming.on('close', () => { connections.delete(incoming); updateParticipantStatus(); if (!connections.size) { setStatus(chatMode === 'private' ? 'Other person offline' : 'Waiting for your person', false); enableChat(false); } });
 		}
 
 		roomForm.addEventListener('submit', (event) => { event.preventDefault(); if (roomCode.value.trim()) connectRoom(roomCode.value); });
@@ -377,32 +387,26 @@
 		joinRoom.addEventListener('click', () => {
 			const code = roomCode.value.trim();
 			if (!code) { notify('Enter the room code first.'); roomCode.focus(); return; }
-			if (peer) peer.destroy();
-			if (lobbySocket) lobbySocket.close();
-			lobbySocket = null;
-			activeRoom = code.toLowerCase();
-			roomTitle.textContent = `Room / ${activeRoom}`;
-			setStatus('Joining room...', false);
-			enableChat(false);
-			peer = new Peer();
-			peer.on('open', () => setupConnection(peer.connect(roomId(activeRoom), { reliable: true })));
-			peer.on('error', () => { setStatus('Could not join room', false); notify('That room is not available. Check the code.'); });
-			copyInvite.disabled = false;
-			leaveRoom.disabled = false;
+			connectRoom(code);
 		});
 		messageForm.addEventListener('submit', (event) => {
 			event.preventDefault();
 			const text = messageInput.value.trim();
-			if (!text || (chatMode === 'group' ? lobbySocket?.readyState !== WebSocket.OPEN : !connections.size)) return;
+			if (!text || lobbySocket?.readyState !== WebSocket.OPEN) return;
 			const payload = { type: 'chat', scope: chatMode, id: `${Date.now()}-${Math.random()}`, text };
 			seenMessages.add(payload.id);
-			if (chatMode === 'group') lobbySocket.send(JSON.stringify(payload));
-			else broadcast(payload);
+			lobbySocket.send(JSON.stringify(payload));
 			addMessage(text, true);
 			messageInput.value = '';
 		});
+		messageInput.addEventListener('input', () => {
+			if (messageInput.disabled) return;
+			sendSignal({ type: 'typing', active: true });
+			clearTimeout(localTypingTimer);
+			localTypingTimer = setTimeout(() => sendSignal({ type: 'typing', active: false }), 900);
+		});
 		copyInvite.addEventListener('click', async () => {
-			const inviteLink = `${location.href.split('#')[0]}#room=${encodeURIComponent(activeRoom)}&peer=${encodeURIComponent(peer.id)}`;
+			const inviteLink = `${location.href.split('#')[0]}#room=${encodeURIComponent(activeRoom)}`;
 			try {
 				if (navigator.clipboard) await navigator.clipboard.writeText(inviteLink);
 				else throw new Error('Clipboard unavailable');

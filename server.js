@@ -1,11 +1,14 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { URL } = require('url');
 const WebSocket = require('ws');
 
 const port = Number(process.env.PORT) || 8080;
 const groups = new Set();
 const clientGroups = new Map();
+const privateRooms = new Map();
+const clientPrivateRooms = new Map();
 const requestLimits = new Map();
 const maxMessageLength = 1000;
 const maxJoinsPerMinute = 10;
@@ -34,8 +37,10 @@ function allowedRate(socket, kind, limit) {
 
 const server = http.createServer((request, response) => {
   securityHeaders(request, response);
-  if (request.url === '/' || request.url === '/index.html') {
+  const requestPath = new URL(request.url, 'http://localhost').pathname;
+  if (requestPath === '/' || requestPath === '/index.html') {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.setHeader('Cache-Control', 'no-store, max-age=0');
     response.end(fs.readFileSync(path.join(__dirname, 'index.html')));
     return;
   }
@@ -51,11 +56,19 @@ function send(socket, message) {
 
 function removeClient(socket) {
   const group = clientGroups.get(socket);
-  if (!group) return;
-  group.delete(socket);
-  clientGroups.delete(socket);
-  if (!group.size) groups.delete(group);
-  group.forEach((member) => send(member, { type: 'peer-left', peerId: socket.peerId }));
+  if (group) {
+    group.delete(socket);
+    clientGroups.delete(socket);
+    if (!group.size) groups.delete(group);
+    group.forEach((member) => send(member, { type: 'peer-left', count: group.size }));
+  }
+  const privateRoom = clientPrivateRooms.get(socket);
+  if (privateRoom) {
+    privateRoom.delete(socket);
+    clientPrivateRooms.delete(socket);
+    if (!privateRoom.size) privateRooms.delete(socket.privateCode);
+    privateRoom.forEach((member) => send(member, { type: 'private-left', count: privateRoom.size }));
+  }
 }
 
 socketServer.on('connection', (socket) => {
@@ -63,7 +76,34 @@ socketServer.on('connection', (socket) => {
     let message;
     try { message = JSON.parse(rawMessage); } catch { return; }
 		if (!message || typeof message.type !== 'string') return;
-    if (message.type === 'chat' && message.scope === 'group' && clientGroups.has(socket)) {
+    if (message.type === 'join-private' && typeof message.code === 'string') {
+      if (clientPrivateRooms.has(socket) || clientGroups.has(socket) || message.code.length > 64) return;
+      const code = message.code.trim().toLowerCase();
+      const room = privateRooms.get(code) || new Set();
+      if (room.size >= 2) { send(socket, { type: 'private-full' }); return; }
+      room.add(socket);
+      privateRooms.set(code, room);
+      clientPrivateRooms.set(socket, room);
+      socket.privateCode = code;
+      send(socket, { type: 'private-joined', count: room.size });
+      room.forEach((member) => { if (member !== socket) send(member, { type: 'private-joined', count: room.size }); });
+      return;
+    }
+    if ((message.type === 'chat' || message.type === 'typing') && message.scope === 'private' && clientPrivateRooms.has(socket)) {
+      if (message.type === 'typing') {
+        clientPrivateRooms.get(socket).forEach((member) => { if (member !== socket) send(member, { type: 'typing', active: Boolean(message.active) }); });
+        return;
+      }
+      if (!allowedRate(socket, 'messages', maxMessagesPerMinute) || typeof message.text !== 'string' || message.text.length > maxMessageLength) return;
+      clientPrivateRooms.get(socket).forEach((member) => { if (member !== socket) send(member, { type: 'chat', scope: 'private', id: message.id, text: message.text }); });
+      return;
+    }
+    if ((message.type === 'chat' || message.type === 'typing') && message.scope === 'group' && clientGroups.has(socket)) {
+      if (message.type === 'typing') {
+        const group = clientGroups.get(socket);
+        group.forEach((member) => { if (member !== socket) send(member, { type: 'typing', active: Boolean(message.active) }); });
+        return;
+      }
       if (!allowedRate(socket, 'messages', maxMessagesPerMinute) || typeof message.text !== 'string' || message.text.length > maxMessageLength) return;
       const group = clientGroups.get(socket);
       group.forEach((member) => { if (member !== socket) send(member, { type: 'chat', scope: 'group', id: message.id, text: String(message.text || '') }); });
