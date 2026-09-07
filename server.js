@@ -39,8 +39,8 @@ const server = http.createServer((request, response) => {
   securityHeaders(request, response);
   const requestPath = new URL(request.url, 'http://localhost').pathname;
   if (requestPath === '/' || requestPath === '/index.html') {
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     response.setHeader('Cache-Control', 'no-store, max-age=0');
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     response.end(fs.readFileSync(path.join(__dirname, 'index.html')));
     return;
   }
